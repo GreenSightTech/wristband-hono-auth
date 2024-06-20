@@ -1,5 +1,5 @@
-import { Request, Response } from 'express';
 import retry from 'async-retry';
+import { Context } from 'hono';
 
 import { LOGIN_REQUIRED_ERROR, TENANT_DOMAIN_TOKEN } from './utils/constants';
 import {
@@ -102,30 +102,30 @@ export class AuthService {
     this.wristbandApplicationDomain = authConfig.wristbandApplicationDomain;
   }
 
-  async login(req: Request, res: Response, config: LoginConfig = {}): Promise<void> {
-    res.header('Cache-Control', 'no-store');
-    res.header('Pragma', 'no-cache');
+  async login(c: Context, config: LoginConfig = {}): Promise<Response> {
+    c.res.headers.set('Cache-Control', 'no-store');
+    c.res.headers.set('Pragma', 'no-cache');
 
     // Make sure a valid tenantDomainName exists for multi-tenant apps.
     let tenantDomainName: string = '';
-    tenantDomainName = resolveTenantDomain(req, this.useTenantSubdomains, this.rootDomain);
+    tenantDomainName = resolveTenantDomain(c.req, this.useTenantSubdomains, this.rootDomain);
     if (!tenantDomainName) {
       const apploginUrl = this.customApplicationLoginPageUrl || `https://${this.wristbandApplicationDomain}/login`;
-      return res.redirect(apploginUrl);
+      return c.redirect(apploginUrl);
     }
 
     // Create the login state which will be cached in a cookie so that it can be accessed in the callback.
     const customState =
       !!config.customState && !!Object.keys(config.customState).length ? config.customState : undefined;
-    const loginState: LoginState = createLoginState(req, this.redirectUri, { tenantDomainName, customState });
+    const loginState: LoginState = createLoginState(c.req, this.redirectUri, { tenantDomainName, customState });
 
     // Clear any stale login state cookies and add a new one fo rthe current request.
-    clearOldestLoginStateCookie(req, res);
+    clearOldestLoginStateCookie(c);
     const encryptedLoginState: string = await encryptLoginState(loginState, this.loginStateSecret);
-    createLoginStateCookie(res, loginState.state, encryptedLoginState, this.dangerouslyDisableSecureCookies);
+    createLoginStateCookie(c, loginState.state, encryptedLoginState, this.dangerouslyDisableSecureCookies);
 
     // Create the Wristband Authorize Endpoint URL which the user will get redirectd to.
-    const authorizeUrl: string = getOAuthAuthorizeUrl(req, {
+    const authorizeUrl: string = getOAuthAuthorizeUrl(c.req, {
       wristbandApplicationDomain: this.wristbandApplicationDomain,
       useCustomDomains: this.useCustomDomains,
       clientId: this.clientId,
@@ -137,15 +137,15 @@ export class AuthService {
     });
 
     // Perform the redirect to Wristband's Authorize Endpoint.
-    return res.redirect(authorizeUrl);
+    return c.redirect(authorizeUrl);
   }
 
-  async callback(req: Request, res: Response): Promise<CallbackData | void> {
-    res.header('Cache-Control', 'no-store');
-    res.header('Pragma', 'no-cache');
+  async callback(c: Context): Promise<CallbackData | Response> {
+    c.res.headers.set('Cache-Control', 'no-store');
+    c.res.headers.set('Pragma', 'no-cache');
 
     // Safety checks -- Wristband backend should never send bad query params
-    const { code, state: paramState, error, error_description: errorDescription } = req.query;
+    const { code, state: paramState, error, error_description: errorDescription } = c.req.query();
     if (!paramState || typeof paramState !== 'string') {
       throw new TypeError('Invalid query parameter [state] passed from Wristband during callback');
     }
@@ -161,35 +161,35 @@ export class AuthService {
 
     const appLoginUrl: string =
       this.customApplicationLoginPageUrl || `https://${this.wristbandApplicationDomain}/login`;
-    const tenantSubdomain: string = this.useTenantSubdomains ? parseTenantSubdomain(req, this.rootDomain) : '';
+    const tenantSubdomain: string = this.useTenantSubdomains ? parseTenantSubdomain(c.req, this.rootDomain) : '';
     let tenantLoginUrl: string =
       this.useTenantSubdomains && !!tenantSubdomain ? this.loginUrl.replace(TENANT_DOMAIN_TOKEN, tenantSubdomain) : '';
 
     // Make sure the login state cookie exists, extract it, and set it to be cleared by the server.
-    const loginStateCookie: string = getAndClearLoginStateCookie(req, res);
+    const loginStateCookie: string = getAndClearLoginStateCookie(c);
     if (!loginStateCookie) {
-      return res.redirect(tenantLoginUrl || appLoginUrl);
+      return c.redirect(tenantLoginUrl || appLoginUrl);
     }
     const loginState: LoginState = await decryptLoginState(loginStateCookie, this.loginStateSecret);
     const { codeVerifier, customState, redirectUri, returnUrl, state: cookieState, tenantDomainName } = loginState;
 
     // Ensure there is a proper tenantDomain
     if (!this.useTenantSubdomains && !tenantDomainName) {
-      return res.redirect(appLoginUrl);
+      return c.redirect(appLoginUrl);
     }
     if (this.useTenantSubdomains && tenantSubdomain !== tenantDomainName) {
-      return res.redirect(tenantLoginUrl);
+      return c.redirect(tenantLoginUrl);
     }
 
     tenantLoginUrl = this.useTenantSubdomains ? tenantLoginUrl : `${this.loginUrl}?tenant_domain=${tenantDomainName}`;
 
     // Check for any potential error conditions
     if (paramState !== cookieState) {
-      return res.redirect(tenantLoginUrl);
+      return c.redirect(tenantLoginUrl);
     }
     if (error) {
       if (error.toLowerCase() === LOGIN_REQUIRED_ERROR) {
-        return res.redirect(tenantLoginUrl);
+        return c.redirect(tenantLoginUrl);
       }
       throw new WristbandError(error, errorDescription);
     }
@@ -218,14 +218,15 @@ export class AuthService {
       ...(!!returnUrl && { returnUrl }),
       tenantDomainName,
       userinfo,
+      type: 'callback',
     };
   }
 
-  async logout(req: Request, res: Response, config: LogoutConfig = {}): Promise<void> {
-    res.header('Cache-Control', 'no-store');
-    res.header('Pragma', 'no-cache');
+  async logout(c: Context, config: LogoutConfig = {}): Promise<Response> {
+    c.res.headers.set('Cache-Control', 'no-store');
+    c.res.headers.set('Pragma', 'no-cache');
 
-    const { host } = req.headers;
+    const host = c.req.header('host');
 
     // Revoke the refresh token only if present.
     if (config.refreshToken) {
@@ -245,17 +246,17 @@ export class AuthService {
     const appLoginUrl: string =
       this.customApplicationLoginPageUrl || `https://${this.wristbandApplicationDomain}/login`;
     if (this.useTenantSubdomains && host!.substring(host!.indexOf('.') + 1) !== this.rootDomain) {
-      return res.redirect(appLoginUrl);
+      return c.redirect(appLoginUrl);
     }
     if (!this.useTenantSubdomains && !config.tenantDomainName) {
-      return res.redirect(appLoginUrl);
+      return c.redirect(appLoginUrl);
     }
 
     // Always perform logout redirect to the Wristband logout endpoint.
     const tenantDomain = this.useTenantSubdomains ? host!.substring(0, host!.indexOf('.')) : config.tenantDomainName;
     const separator = this.useCustomDomains ? '.' : '-';
     const logoutUrl = `https://${tenantDomain}${separator}${this.wristbandApplicationDomain}/api/v1/logout?${query}`;
-    return res.redirect(logoutUrl);
+    return c.redirect(logoutUrl);
   }
 
   async refreshTokenIfExpired(refreshToken: string, expiresAt: number): Promise<TokenData | null> {

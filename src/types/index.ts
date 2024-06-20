@@ -70,6 +70,7 @@ export type CallbackData = TokenData & {
   returnUrl?: string;
   tenantDomainName?: string;
   userinfo: Userinfo;
+  type: 'callback';
 };
 
 /**

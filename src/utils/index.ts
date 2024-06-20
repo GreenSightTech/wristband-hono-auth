@@ -1,7 +1,8 @@
 /* eslint-disable import/no-extraneous-dependencies */
-import { createHash, randomBytes } from 'crypto';
-import { Request, Response } from 'express';
+import { createHash, randomBytes } from 'node:crypto';
 import { defaults, seal, unseal } from 'iron-webcrypto';
+import { Context, HonoRequest } from 'hono';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import * as crypto from 'uncrypto';
 
 import { LOGIN_STATE_COOKIE_PREFIX } from './constants';
@@ -32,13 +33,13 @@ export async function decryptLoginState(loginStateCookie: string, loginStateSecr
   return loginState as LoginState;
 }
 
-export function getAndClearLoginStateCookie(req: Request, res: Response): string {
-  const { state } = req.query;
+export function getAndClearLoginStateCookie(c: Context): string {
+  const { state } = c.req.query();
   const paramState = state ? state.toString() : '';
 
   // This should always resolve to a single cookie with this prefix, or possibly no cookie at all
   // if it got cleared or expired before the callback was triggered.
-  const matchingLoginCookieNames = Object.keys(req.cookies).filter((cookieName) => {
+  const matchingLoginCookieNames = Object.keys(getCookie(c)).filter((cookieName) => {
     return cookieName.startsWith(`${LOGIN_STATE_COOKIE_PREFIX}${paramState}:`);
   });
 
@@ -46,24 +47,24 @@ export function getAndClearLoginStateCookie(req: Request, res: Response): string
 
   if (matchingLoginCookieNames.length > 0) {
     const cookieName = matchingLoginCookieNames[0];
-    loginStateCookie = req.cookies[cookieName];
-    res.clearCookie(cookieName);
+    loginStateCookie = getCookie(c, cookieName)!;
+    deleteCookie(c, cookieName);
   }
 
   return loginStateCookie;
 }
 
-export function parseTenantSubdomain(req: Request, rootDomain: string): string {
-  const { host } = req.headers;
+export function parseTenantSubdomain(req: HonoRequest, rootDomain: string): string {
+  const host = req.header('host');
   return host!.substring(host!.indexOf('.') + 1) === rootDomain ? host!.substring(0, host!.indexOf('.')) : '';
 }
 
-export function resolveTenantDomain(req: Request, useTenantSubdomains: boolean, rootDomain: string): string {
+export function resolveTenantDomain(req: HonoRequest, useTenantSubdomains: boolean, rootDomain: string): string {
   if (useTenantSubdomains) {
     return parseTenantSubdomain(req, rootDomain);
   }
 
-  const { tenant_domain: tenantDomainParam } = req.query;
+  const { tenant_domain: tenantDomainParam } = req.query();
 
   if (!!tenantDomainParam && typeof tenantDomainParam !== 'string') {
     throw new TypeError('More than one [tenant_domain] query parameter was passed to the login endpoint');
@@ -72,8 +73,8 @@ export function resolveTenantDomain(req: Request, useTenantSubdomains: boolean, 
   return tenantDomainParam || '';
 }
 
-export function createLoginState(req: Request, redirectUri: string, config: LoginStateMapConfig = {}): LoginState {
-  const { return_url: returnUrl } = req.query;
+export function createLoginState(req: HonoRequest, redirectUri: string, config: LoginStateMapConfig = {}): LoginState {
+  const { return_url: returnUrl } = req.query();
 
   if (!!returnUrl && typeof returnUrl !== 'string') {
     throw new TypeError('More than one [return_url] query parameter was passed to the login endpoint');
@@ -91,8 +92,8 @@ export function createLoginState(req: Request, redirectUri: string, config: Logi
   return config.customState ? { ...loginStateData, customState: config.customState } : loginStateData;
 }
 
-export function clearOldestLoginStateCookie(req: Request, res: Response): void {
-  const { cookies } = req;
+export function clearOldestLoginStateCookie(c: Context): void {
+  const cookies = getCookie(c);
 
   // The max amount of concurrent login state cookies we allow is 3.  If there are already 3 cookies,
   // then we clear the one with the oldest creation timestamp to make room for the new one.
@@ -113,20 +114,20 @@ export function clearOldestLoginStateCookie(req: Request, res: Response): void {
     allLoginCookieNames.forEach((cookieName: string) => {
       const timestamp: string = cookieName.split(':')[2];
       if (!mostRecentTimestamps.includes(timestamp)) {
-        res.clearCookie(cookieName);
+        deleteCookie(c, cookieName);
       }
     });
   }
 }
 
 export function createLoginStateCookie(
-  res: Response,
+  c: Context,
   state: string,
   encryptedLoginState: string,
   dangerouslyDisableSecureCookies: boolean
 ): void {
   // Add the new login state cookie (1 hour max age).
-  res.cookie(`${LOGIN_STATE_COOKIE_PREFIX}${state}:${Date.now().valueOf()}`, encryptedLoginState, {
+  setCookie(c, `${LOGIN_STATE_COOKIE_PREFIX}${state}:${Date.now().valueOf()}`, encryptedLoginState, {
     httpOnly: true,
     maxAge: 3600000,
     path: '/',
@@ -136,7 +137,7 @@ export function createLoginStateCookie(
 }
 
 export function getOAuthAuthorizeUrl(
-  req: Request,
+  req: HonoRequest,
   config: {
     clientId: string;
     codeVerifier: string;
@@ -148,7 +149,7 @@ export function getOAuthAuthorizeUrl(
     wristbandApplicationDomain: string;
   }
 ): string {
-  const { login_hint: loginHint } = req.query;
+  const { login_hint: loginHint } = req.query();
 
   if (!!loginHint && typeof loginHint !== 'string') {
     throw new TypeError('More than one [login_hint] query parameter was passed to the login endpoint');

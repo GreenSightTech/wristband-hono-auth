@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Context } from 'hono';
 
 import { AuthService } from './auth-service';
 import { AuthConfig, CallbackData, LoginConfig, LogoutConfig, TokenData } from './types';
@@ -17,43 +17,40 @@ export interface WristbandAuth {
    * Initiates a login request by redirecting to Wristband. An authorization request is constructed
    * for the user attempting to login in order to start the Authorization Code flow.
    *
-   * Your Express request can contain Wristband-specific query parameters:
+   * Your Hono request can contain Wristband-specific query parameters:
    * - return_url: The location of where to send users after authenticating. (Optional)
    * - login_hint: A hint to Wristband about user's preferred login identifier. (Optional)
    *
-   * @param {Request} req - The Express request object.
-   * @param {Response} res - The Express response object.
+   * @param {Context} c - The Hono context object.
    * @param {LoginConfig} [config] - Additional configuration for creating an auth request to Wristband.
-   * @returns {Promise<void>} - A Promise as a result of a URL redirect to Wristband.
+   * @returns {Promise<Response>} - A Promise as a result of a URL redirect to Wristband.
    * @throws {Error} - If an error occurs during the login process.
    */
-  login(req: Request, res: Response, config?: LoginConfig): Promise<void>;
+  login(c: Context, config?: LoginConfig): Promise<Response>;
 
   /**
    * Receives incoming requests from Wristband with an authorization code. It will then proceed to exchange the auth
    * code for an access token as well as fetch the userinfo for the user attempting to login.
    *
-   * @param {Request} req - The Express request object.
-   * @param {Response} res - The Express response object.
-   * @returns {Promise<CallbackData | void>} - A Promise with all token data, userinfo, custom state, and return URL,
+   * @param {Context} c - The Hono context object.
+   * @returns {Promise<CallbackData | Response>} - A Promise with all token data, userinfo, custom state, and return URL,
    * assuming the exchange of an auth code for a token succeeds (response contents depend on what inputs were given
    * to the login endpoint during the auth request). Otherwise, a Promise of type void is returned as a result of a
    * URL redirect in the event of certain error scenarios.
    * @throws {Error} - If an error occurs during the callback handling.
    */
-  callback(req: Request, res: Response): Promise<CallbackData | void>;
+  callback(c: Context): Promise<CallbackData | Response>;
 
   /**
    * Revokes the user's refresh token and redirects them to the Wristband logout endpoint to destroy
    * their authenticated session in Wristband.
    *
-   * @param {Request} req - The Express request object.
-   * @param {Response} res - The Express response object.
+   * @param {Context} c - The Hono context object.
    * @param {LogoutConfig} [config] - Additional configuration for logging out the user.
-   * @returns {Promise<void>} - A Promise of type void as a result of a URL redirect to Wristband.
+   * @returns {Promise<Response>} - A Promise of type void as a result of a URL redirect to Wristband.
    * @throws {Error} - If an error occurs during the logout process.
    */
-  logout(req: Request, res: Response, config?: LogoutConfig): Promise<void>;
+  logout(c: Context, config?: LogoutConfig): Promise<Response>;
 
   /**
    * Checks if the user's access token is expired and refreshed the token, if necessary.
@@ -83,16 +80,16 @@ export class WristbandAuthImpl implements WristbandAuth {
     this.authService = new AuthService(authConfig);
   }
 
-  login(req: Request, res: Response, config?: LoginConfig): Promise<void> {
-    return this.authService.login(req, res, config);
+  login(c: Context, config?: LoginConfig): Promise<Response> {
+    return this.authService.login(c, config);
   }
 
-  callback(req: Request, res: Response): Promise<CallbackData | void> {
-    return this.authService.callback(req, res);
+  callback(c: Context): Promise<CallbackData | Response> {
+    return this.authService.callback(c);
   }
 
-  logout(req: Request, res: Response, config?: LogoutConfig): Promise<void> {
-    return this.authService.logout(req, res, config);
+  logout(c: Context, config?: LogoutConfig): Promise<Response> {
+    return this.authService.logout(c, config);
   }
 
   refreshTokenIfExpired(refreshToken: string, expiresAt: number): Promise<TokenData | null> {
